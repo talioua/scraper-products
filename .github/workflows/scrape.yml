@@ -1,4 +1,4 @@
-name: Scrape Products
+name: Scrape Cotepara V2
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -18,11 +18,11 @@ jobs:
 
       - name: Install packages
         run: |
-          pip install requests pandas beautifulsoup4 lxml openpyxl
+          pip install requests beautifulsoup4 pandas lxml
 
-      - name: Run scraper
+      - name: Run scraper V2
         run: |
-          python scrape_cotepara.py
+          python scrape_cotepara_v2.py
 
       - name: Show files
         run: |
@@ -31,6 +31,5 @@ jobs:
       - name: Upload CSV
         uses: actions/upload-artifact@v4
         with:
-          name: csv-files
-          path: |
-            *.csv
+          name: products-cotepara-v2
+          path: products_cotepara_v2.csv
