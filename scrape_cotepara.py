@@ -1,113 +1,132 @@
-import requests
+import requests, re, time, html
 import pandas as pd
 from bs4 import BeautifulSoup
-import time
-import re
+from urllib.parse import urljoin
 
-products = []
+BASE = "https://cotepara.ma"
+OUTPUT = "products_cotepara.csv"
 
-page = 1
+headers = {"User-Agent": "Mozilla/5.0"}
 
-while True:
+def clean(x):
+    if not x: return ""
+    return re.sub(r"\s+", " ", BeautifulSoup(str(x), "html.parser").get_text(" ", strip=True)).strip()
 
-    url = f"https://cotepara.ma/wp-json/wc/store/v1/products?per_page=100&page={page}"
+def get_product_urls():
+    urls = set()
+    sitemap_urls = [
+        f"{BASE}/product-sitemap.xml",
+        f"{BASE}/wp-sitemap-posts-product-1.xml",
+        f"{BASE}/sitemap_index.xml",
+        f"{BASE}/sitemap.xml",
+    ]
 
-    print("Reading:", url)
-
-    r = requests.get(url, timeout=60)
-
-    if r.status_code != 200:
-        break
-
-    data = r.json()
-
-    if not data:
-        break
-
-    for p in data:
-
-        name = p.get("name", "")
-        short_desc = p.get("short_description", "")
-        description = p.get("description", "")
-
-        prices = p.get("prices", {})
-
-        regular_price = prices.get("regular_price", "")
-        sale_price = prices.get("sale_price", "")
-
+    for sm in sitemap_urls:
         try:
-            regular_price = float(regular_price) / 100
-        except:
-            regular_price = ""
-
-        try:
-            sale_price = float(sale_price) / 100
-        except:
-            sale_price = ""
-
-        images = p.get("images", [])
-
-        image_hd = ""
-        all_images = []
-
-        for img in images:
-            src = img.get("src", "")
-
-            if src:
-                all_images.append(src)
-
-            if not image_hd and src:
-                image_hd = src
-
-        categories = []
-
-        for c in p.get("categories", []):
-            categories.append(c.get("name", ""))
-
-        tags = []
-
-        for t in p.get("tags", []):
-            tags.append(t.get("name", ""))
-
-        permalink = p.get("permalink", "")
-
-        barcode = ""
-
-        try:
-            html = requests.get(permalink, timeout=60).text
-
-            soup = BeautifulSoup(html, "lxml")
-
-            text = soup.get_text(" ", strip=True)
-
-            m = re.search(r"Référence\s*[:\-]?\s*(\d{8,14})", text)
-
-            if m:
-                barcode = m.group(1)
-
+            r = requests.get(sm, headers=headers, timeout=30)
+            txt = r.text
+            found = re.findall(r"<loc>(.*?)</loc>", txt)
+            for u in found:
+                u = html.unescape(u)
+                if "/product/" in u or "/produit/" in u:
+                    urls.add(u)
+                if "sitemap" in u and u not in sitemap_urls:
+                    try:
+                        rr = requests.get(u, headers=headers, timeout=30)
+                        for uu in re.findall(r"<loc>(.*?)</loc>", rr.text):
+                            uu = html.unescape(uu)
+                            if "/product/" in uu or "/produit/" in uu:
+                                urls.add(uu)
+                    except:
+                        pass
         except:
             pass
 
-        products.append({
-            "nom": name,
-            "description_courte": short_desc,
-            "description": description,
-            "tarif_regular": regular_price,
-            "tarif_promo": sale_price,
-            "barcode": barcode,
-            "categorie": ", ".join(categories),
-            "tags": ", ".join(tags),
-            "image_hd": image_hd,
-            "all_images": ", ".join(all_images),
-            "url": permalink
-        })
+    return list(urls)
 
+def scrape_product(url):
+    r = requests.get(url, headers=headers, timeout=40)
+    soup = BeautifulSoup(r.text, "html.parser")
+    text = soup.get_text(" ", strip=True)
+
+    name = clean(soup.find("h1").get_text(" ", strip=True) if soup.find("h1") else "")
+
+    ref = ""
+    m = re.search(r"Référence\s*:\s*(\d{8,14})", text)
+    if m:
+        ref = m.group(1)
+
+    price = ""
+    sale = ""
+    prices = re.findall(r"(\d+[,.]?\d*)\s*MAD", text)
+    if prices:
+        price = prices[0].replace(",", ".")
+        if len(prices) > 1:
+            sale = prices[0].replace(",", ".")
+            price = prices[1].replace(",", ".")
+
+    img = ""
+    og = soup.find("meta", property="og:image")
+    if og:
+        img = og.get("content", "")
+
+    if not img:
+        im = soup.select_one(".woocommerce-product-gallery img, img.wp-post-image, img")
+        if im:
+            img = im.get("data-src") or im.get("src") or ""
+
+    if img:
+        img = urljoin(url, img)
+        img = re.sub(r"-\d+x\d+(?=\.)", "", img)
+
+    short_desc = ""
+    sd = soup.select_one(".woocommerce-product-details__short-description")
+    if sd:
+        short_desc = clean(sd.get_text(" ", strip=True))
+
+    desc = ""
+    d = soup.select_one("#tab-description, .woocommerce-Tabs-panel--description")
+    if d:
+        desc = clean(d.get_text(" ", strip=True))
+
+    if not desc:
+        desc = short_desc
+
+    cats = []
+    for c in soup.select(".posted_in a, .breadcrumb a"):
+        t = clean(c.get_text())
+        if t and t.lower() not in ["accueil", "home"]:
+            cats.append(t)
+
+    return {
+        "Type": "simple",
+        "SKU": ref,
+        "Code barres": ref,
+        "Name": name,
+        "Published": 1,
+        "Short description": short_desc,
+        "Description": desc,
+        "Regular price": price,
+        "Sale price": sale,
+        "Categories": " > ".join(dict.fromkeys(cats)),
+        "Images": img,
+        "Source URL": url
+    }
+
+urls = get_product_urls()
+print("FOUND URLS:", len(urls))
+
+rows = []
+
+for i, url in enumerate(urls, 1):
+    try:
+        print(i, "/", len(urls), url)
+        rows.append(scrape_product(url))
+        if i % 20 == 0:
+            pd.DataFrame(rows).to_csv(OUTPUT, index=False, encoding="utf-8-sig")
         time.sleep(1)
+    except Exception as e:
+        print("ERROR:", url, e)
 
-    page += 1
-
-df = pd.DataFrame(products)
-
-df.to_csv("cotepara_products.csv", index=False, encoding="utf-8-sig")
-
-print("DONE:", len(df), "products")
+pd.DataFrame(rows).to_csv(OUTPUT, index=False, encoding="utf-8-sig")
+print("DONE:", len(rows), OUTPUT)
