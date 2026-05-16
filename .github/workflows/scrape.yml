@@ -11,21 +11,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install packages
         run: |
-          pip install -r requirements.txt
+          pip install requests pandas beautifulsoup4 lxml openpyxl
 
       - name: Run scraper
         run: |
           python scrape_cotepara.py
 
+      - name: Show files
+        run: |
+          ls -lh
+
       - name: Upload CSV
         uses: actions/upload-artifact@v4
         with:
           name: csv-files
-          path: "*.csv"
+          path: |
+            *.csv
